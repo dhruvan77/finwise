@@ -46,7 +46,7 @@ const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>
 const inr=(v,d=0)=>v==null?'—':(v<0?'-':'')+'₹'+Math.abs(v).toLocaleString('en-IN',{minimumFractionDigits:d,maximumFractionDigits:d});
 const cmp=v=>{const a=Math.abs(v),s=v<0?'-':'';return a>=1e7?s+'₹'+(a/1e7).toFixed(1)+'Cr':a>=1e5?s+'₹'+(a/1e5).toFixed(1)+'L':a>=1e3?s+'₹'+Math.round(a/1e3)+'k':s+'₹'+Math.round(a)};
 const nice=s=>String(s||'').replace(/_/g,' ');const sev=s=>({high:'bad',medium:'warn',low:'',affordable:'good',affordable_with_caution:'warn',not_recommended:'bad'}[s]??'');
-const API_BASE='https://YOUR-RENDER-URL.onrender.com/api/v1'; // set once at deploy time
+const API_BASE = 'https://finwise-po22.onrender.com/api/v1'; // set once at deploy time
 const S={base:API_BASE,tok:localStorage.fwTok||'',tw:null};
 async function api(p,o={}){const h={};if(S.tok)h.Authorization='Bearer '+S.tok;let b=o.body;if(b&&!(b instanceof FormData)){h['Content-Type']='application/json';b=JSON.stringify(b)}
  let r;try{r=await fetch(S.base+p,{method:o.method||'GET',headers:h,body:b})}catch{throw new Error('Unable to connect to FinWise. Please check your connection and try again.')}
