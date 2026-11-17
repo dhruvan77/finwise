@@ -183,16 +183,36 @@ class GroqClient:
             body["reasoning_effort"] = s.groq_reasoning_effort
         if tools:
             body["tools"], body["tool_choice"] = tools, "auto"
-        try:
-            r = httpx.post(f"{s.groq_base_url}/chat/completions", json=body, timeout=60,
-                           headers={"Authorization": f"Bearer {s.groq_api_key}", "Content-Type": "application/json"})
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]
-        except httpx.HTTPStatusError as e:
-            log.error("Groq HTTP %s", e.response.status_code)
-            raise AppError(502, "llm_error", f"The AI provider returned an error ({e.response.status_code}).")
-        except (httpx.HTTPError, KeyError, ValueError):
-            raise AppError(502, "llm_unavailable", "The AI provider is unavailable. Please try again.")
+        last = None
+        for attempt in range(3):           # tool-call 400s ("tool_use_failed") are often random; retry before giving up
+            try:
+                r = httpx.post(f"{s.groq_base_url}/chat/completions", json=body, timeout=60,
+                               headers={"Authorization": f"Bearer {s.groq_api_key}", "Content-Type": "application/json"})
+                if r.status_code == 400:
+                    log.error("Groq 400 (attempt %s): %s", attempt + 1, r.text[:500])   # real reason shows in Render logs
+                    last = 400
+                    continue
+                r.raise_for_status()
+                return r.json()["choices"][0]["message"]
+            except httpx.HTTPStatusError as e:
+                log.error("Groq HTTP %s: %s", e.response.status_code, e.response.text[:300])
+                raise AppError(502, "llm_error", f"The AI provider returned an error ({e.response.status_code}).")
+            except (httpx.HTTPError, KeyError, ValueError):
+                raise AppError(502, "llm_unavailable", "The AI provider is unavailable. Please try again.")
+        # Persistent 400 after tools already ran: answer from the tool results we already have (no tools, no invented numbers)
+        if tools and any(m.get("role") == "tool" for m in messages):
+            try:
+                msgs2 = list(messages) + [{"role": "user", "content": "Using only the tool results so far, give your final JSON answer now."}]
+                body2 = {k: v for k, v in body.items() if k not in ("tools", "tool_choice")}
+                body2["messages"] = msgs2
+                r = httpx.post(f"{s.groq_base_url}/chat/completions", json=body2, timeout=60,
+                               headers={"Authorization": f"Bearer {s.groq_api_key}", "Content-Type": "application/json"})
+                if r.status_code == 200:
+                    return r.json()["choices"][0]["message"]
+                log.error("Groq fallback failed %s: %s", r.status_code, r.text[:500])
+            except (httpx.HTTPError, KeyError, ValueError):
+                pass
+        raise AppError(502, "llm_error", f"The AI provider returned an error ({last}). Please try again.")
 
 
 def get_llm_client() -> LLMClient:
