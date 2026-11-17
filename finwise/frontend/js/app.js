@@ -4,10 +4,15 @@ const cmp=v=>{const a=Math.abs(v),s=v<0?'-':'';return a>=1e7?s+'₹'+(a/1e7).toF
 const nice=s=>String(s||'').replace(/_/g,' ');const sev=s=>({high:'bad',medium:'warn',low:'',affordable:'good',affordable_with_caution:'warn',not_recommended:'bad'}[s]??'');
 const API_BASE = (window.FINWISE_CONFIG&&window.FINWISE_CONFIG.API_BASE)||'https://finwise-po22.onrender.com/api/v1';
 const S={base:API_BASE,tok:localStorage.fwTok||'',tw:null,msg:''};
-async function api(p,o={}){const h={};if(S.tok)h.Authorization='Bearer '+S.tok;let b=o.body;if(b&&!(b instanceof FormData)){h['Content-Type']='application/json';b=JSON.stringify(b)}
+async function apiRaw(p,o={}){const h={};if(S.tok)h.Authorization='Bearer '+S.tok;let b=o.body;if(b&&!(b instanceof FormData)){h['Content-Type']='application/json';b=JSON.stringify(b)}
  let r;try{r=await fetch(S.base+p,{method:o.method||'GET',headers:h,body:b})}catch{throw new Error('Unable to connect to FinWise. Please check your connection and try again.')}
  if(r.status==204)return null;const d=await r.json().catch(()=>({}));
  if(!r.ok){if(r.status==401&&S.tok){S.tok='';localStorage.removeItem('fwTok');S.msg='Your session expired. Please sign in again.';setTimeout(boot,0)}throw new Error(d.error?.message||'Request failed ('+r.status+')')}return d}
+const GC=new Map(),GTTL=120000;let PF=0;
+async function api(p,o={}){const m=(o.method||'GET').toUpperCase();
+ if(m=='GET'&&!p.startsWith('/ai/')&&!p.includes('refresh=true')){const c=GC.get(p);if(c&&Date.now()-c.t<GTTL)return c.d;const d=await apiRaw(p,o);GC.set(p,{t:Date.now(),d});return d}
+ const d=await apiRaw(p,o);if(m!='GET')GC.clear();return d}
+function prefetch(){if(PF)return;PF=1;setTimeout(()=>api('/anomalies').catch(()=>{}),1500)}
 /* ---------- charts (inline SVG, dashed grid, 2px strokes per design system) ---------- */
 function line(id,series,o={}){const W=720,H=o.h||260,L=56,R=12,T=10,B=26;const n=series[0].pts.length;let all=[];series.forEach(s=>s.pts.forEach(p=>all.push(p.y,p.lo??p.y,p.hi??p.y)));
  let mn=Math.min(...all),mx=Math.max(...all);if(mn==mx){mn-=1;mx+=1}const pad=(mx-mn)*.08;mn-=pad;mx+=pad;const X=i=>L+i*(W-L-R)/Math.max(1,n-1),Y=v=>T+(mx-v)*(H-T-B)/(mx-mn);
@@ -143,15 +148,15 @@ V.import=async()=>{setTimeout(()=>{const z=$('#dz'),i=$('#fi'),out=$('#iout');z.
 /* ---------- shell ---------- */
 const NAV=[['Core intelligence'],['dashboard','Overview'],['twin','Financial Digital Twin'],['simulator','AI Simulator'],['stress','Stress Testing'],['Management'],['transactions','Transactions'],['import','Import Data'],['alerts','Alerts & Anomalies'],['AI advisory'],['coach','AI Financial Coach']];
 async function go(){const k=(location.hash.slice(2)||'dashboard'),v=$('#view');if(!v)return boot();document.querySelectorAll('#rail a').forEach(a=>a.classList.toggle('on',a.dataset.k==k));$('#rail').classList.remove('open');
- try{S.tw=await api('/financial-twin');const t=S.tw,has=!!(t.data_quality&&t.data_quality.transactions>0&&t.balance);
+ document.body.classList.add('busy');try{S.tw=await api('/financial-twin');const t=S.tw,has=!!(t.data_quality&&t.data_quality.transactions>0&&t.balance);
   $('#chips').innerHTML=has?`<div class="chip">Balance <b>${inr(t.balance.current)}</b></div><div class="chip">Free cash flow/mo <b>${inr(t.savings.projected_monthly_free_cash_flow)}</b></div>`:'<div class="chip">No data yet</div>';
   const open=['transactions','import','coach'];v.innerHTML=(!has&&!open.includes(k))?onboard():await (V[k]||V.dashboard)();
-  v.classList.remove('pg');void v.offsetWidth;v.classList.add('pg');countUp()}catch(e){v.innerHTML=`<div class="err">${esc(e.message)}</div>`}}
-function signOut(){const t=S.tok;S.tok='';localStorage.removeItem('fwTok');if(t)fetch(S.base+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+t}}).catch(()=>{});S.msg='';boot()}
+  v.classList.remove('pg');void v.offsetWidth;v.classList.add('pg');countUp();prefetch()}catch(e){v.innerHTML=`<div class="err">${esc(e.message)}</div>`}finally{document.body.classList.remove('busy')}}
+function signOut(){GC.clear();PF=0;const t=S.tok;S.tok='';localStorage.removeItem('fwTok');if(t)fetch(S.base+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+t}}).catch(()=>{});S.msg='';boot()}
 async function boot(){if(!S.tok)return authView();
  $('#app').innerHTML=`<nav id="rail"><div class="logo">FinWise AI<small>FINANCIAL INTELLIGENCE</small></div>${NAV.map(n=>n[1]?`<a href="#/${n[0]}" data-k="${n[0]}">${n[1]}</a>`:`<div class="sec">${n[0]}</div>`).join('')}<div class="foot"><div id="who">Signed in</div><button class="sec sm" style="margin-top:8px" onclick="signOut()">Sign out</button></div></nav><div id="main"><div id="top"><button id="menu" class="sec sm" onclick="$('#rail').classList.toggle('open')">☰</button><div id="chips" style="display:flex;gap:12px;flex-wrap:wrap"></div><span class="mut" style="margin-left:auto;font-size:12px">Informational decision support, not financial advice</span></div><div id="view"><div class="mut">Loading…</div></div></div>`;
  api('/users/me').then(u=>$('#who').textContent=u.full_name||u.email).catch(()=>{});go()}
-function authView(mode='login'){const reg=mode=='reg';
+function authView(mode='login'){GC.clear();PF=0;const reg=mode=='reg';
  $('#app').innerHTML=`<div id="auth"><div class="hero"><small>FINWISE AI</small><h1>Don’t just track your money.<br>Understand it.</h1><p>Predict your balance, stress-test your plans and ask an AI coach, all driven by your real transaction history.</p><div style="margin-top:22px"><div class="feat" style="animation-delay:.2s"><i>✓</i>90-day balance forecasts</div><div class="feat" style="animation-delay:.3s"><i>✓</i>What-if purchase & loan simulator</div><div class="feat" style="animation-delay:.4s"><i>✓</i>Anomaly alerts & AI financial coach</div></div></div>
  <div class="form"><div class="box"><h1 style="font-size:26px">${reg?'Create your account':'Welcome back'}</h1><div class="sub" style="margin-bottom:0">${reg?'Start in under a minute.':'Sign in to your dashboard.'}</div>
  <div class="seg ${reg?'reg':''}"><span class="pill"></span><button class="${reg?'':'on'}" id="t1">Sign in</button><button class="${reg?'on':''}" id="t2">Register</button></div>
