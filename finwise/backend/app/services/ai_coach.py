@@ -168,6 +168,28 @@ def execute_tool(db: Session, user_id, name: str, raw_args: str | dict) -> dict:
 
 
 # ------------------------------------------------------------------ LLM client
+def _recover_failed_generation(resp_text: str) -> dict | None:
+    """gpt-oss on Groq sometimes emits its final JSON answer as a bogus tool call named 'JSON' -> HTTP 400 tool_use_failed.
+    The finished answer is inside `failed_generation`; recover it so the user still gets a real, tool-grounded reply."""
+    try:
+        err = json.loads(resp_text).get("error", {})
+        if err.get("code") != "tool_use_failed":
+            return None
+        fg = (err.get("failed_generation") or "").strip()
+        i, j = fg.find("{"), fg.rfind("}")
+        obj = json.loads(fg[i:j + 1]) if i >= 0 and j > i else None
+        if not isinstance(obj, dict):
+            return None
+        args = obj.get("arguments", obj)
+        if isinstance(args, str):
+            args = json.loads(args)
+        if obj.get("name", "").lower() not in ("json", "answer", "final", "final_answer", "") or not isinstance(args, dict) or "answer" not in args:
+            return None            # a real (but malformed) tool call: let the retry loop handle it
+        return {"role": "assistant", "content": json.dumps(args)}
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 class LLMClient(Protocol):
     def chat(self, messages: list[dict], tools: list[dict] | None) -> dict: ...
 
@@ -190,6 +212,10 @@ class GroqClient:
                                headers={"Authorization": f"Bearer {s.groq_api_key}", "Content-Type": "application/json"})
                 if r.status_code == 400:
                     log.error("Groq 400 (attempt %s): %s", attempt + 1, r.text[:500])   # real reason shows in Render logs
+                    rec = _recover_failed_generation(r.text)
+                    if rec:
+                        log.info("Recovered final answer from failed_generation")
+                        return rec
                     last = 400
                     continue
                 r.raise_for_status()
