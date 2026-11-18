@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -210,6 +211,17 @@ class GroqClient:
             try:
                 r = httpx.post(f"{s.groq_base_url}/chat/completions", json=body, timeout=60,
                                headers={"Authorization": f"Bearer {s.groq_api_key}", "Content-Type": "application/json"})
+                if r.status_code == 429:           # Groq rate limit (requests / tokens per minute or per day)
+                    log.warning("Groq 429 rate limit (attempt %s): %s", attempt + 1, r.text[:400])
+                    try:
+                        wait = min(float(r.headers.get("retry-after", 3)), 10.0)
+                    except ValueError:
+                        wait = 3.0
+                    last = 429
+                    if attempt < 2 and wait <= 10:
+                        time.sleep(wait)
+                        continue
+                    raise AppError(503, "llm_rate_limited", "The AI coach is busy (rate limit reached). Please wait about a minute and try again.")
                 if r.status_code == 400:
                     log.error("Groq 400 (attempt %s): %s", attempt + 1, r.text[:500])   # real reason shows in Render logs
                     rec = _recover_failed_generation(r.text)
